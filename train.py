@@ -15,8 +15,6 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
-
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', type=str,
                     default='Myops', help='experiment_name')
@@ -29,11 +27,11 @@ parser.add_argument('--max_iterations', type=int,
 parser.add_argument('--max_epochs', type=int,
                     default=300, help='maximum epoch number to train')
 parser.add_argument('--batch_size', type=int,
-                    default=24, help='batch_size per gpu')
-parser.add_argument('--n_gpu', type=int, default=2, help='total gpu')
+                    default=16, help='batch_size per gpu (total batch is batch_size * n_gpu)')
+parser.add_argument('--n_gpu', type=int, default=1, help='total gpu')
 parser.add_argument('--deterministic', type=int,  default=1,
                     help='whether use deterministic training')
-parser.add_argument('--base_lr', type=float,  default=0.001,
+parser.add_argument('--base_lr', type=float,  default=0.0003333,
                     help='segmentation network learning rate')
 parser.add_argument('--img_size', type=int,
                     default=128, help='input patch size of network input')

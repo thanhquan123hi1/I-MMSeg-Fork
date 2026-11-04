@@ -47,9 +47,11 @@ def trainer_Myops(args, model, snapshot_path):
     max_epoch = args.max_epochs
     max_iterations = args.max_epochs * len(trainloader) 
     logging.info("{} iterations per epoch. {} max iterations ".format(len(trainloader), max_iterations))
-    iterator = tqdm(range(max_epoch), ncols=70)
+    iterator = tqdm(range(max_epoch), ncols=70, disable=not sys.stderr.isatty())
     for epoch_num in iterator:
         do_contrast = epoch_num > args.start_contrast_epoch
+        epoch_loss = 0.0
+        epoch_fuse_dice_loss = 0.0
         for i_batch, sampled_batch in enumerate(trainloader):
             image_batch, image1_batch, image2_batch, label_batch = sampled_batch['image'], sampled_batch['image1'], sampled_batch['image2'], sampled_batch['label']
             image_batch, image1_batch, image2_batch, label_batch = image_batch.cuda(), image1_batch.cuda(), image2_batch.cuda(), label_batch.cuda()
@@ -96,16 +98,22 @@ def trainer_Myops(args, model, snapshot_path):
             writer.add_scalar('info/total_loss', loss, iter_num)
             writer.add_scalar('info/loss_ce', out_dice_loss, iter_num)
 
-            logging.info('iteration %d : loss : %f, loss_fuse: %f' % (iter_num, loss.item(), out_dice_loss.item()))
+            epoch_loss += loss.item()
+            epoch_fuse_dice_loss += out_dice_loss.item()
 
             if iter_num % 20 == 0:
-                image = image_batch[1, 0:1, :, :]
-                image = (image - image.min()) / (image.max() - image.min())
+                image_index = min(1, image_batch.shape[0] - 1)
+                image = image_batch[image_index, 0:1, :, :]
+                image = (image - image.min()) / (image.max() - image.min()).clamp_min(1e-8)
                 writer.add_image('train/Image', image, iter_num)
                 out_pre = torch.argmax(torch.softmax(out_pre, dim=1), dim=1, keepdim=True)
-                writer.add_image('train/Prediction', out_pre[1, ...] * 50, iter_num)
-                labs = label_batch[1, ...].unsqueeze(0) * 50
+                writer.add_image('train/Prediction', out_pre[image_index, ...] * 50, iter_num)
+                labs = label_batch[image_index, ...].unsqueeze(0) * 50
                 writer.add_image('train/GroundTruth', labs, iter_num)
+
+        logging.info('epoch %d/%d | mean_batch_loss %.6f | fuse_dice_loss %.6f | lr %.8f | contrast %s',
+                     epoch_num + 1, max_epoch, epoch_loss / len(trainloader),
+                     epoch_fuse_dice_loss / len(trainloader), lr_, 'on' if do_contrast else 'off')
 
         save_interval = 20  
         if (epoch_num + 1) % save_interval == 0:

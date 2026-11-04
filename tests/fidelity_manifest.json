@@ -1,0 +1,18 @@
+{
+  "baseline_commit": "90f46c4eb72924509895fcda6bc6a3b8c3316e66",
+  "protected_files": {
+    "networks/vit_seg_configs.py": "478a83dffffde29bc0343b6cd141f85b890d1b9745e903b46eae8942179b5e9b",
+    "networks/vit_seg_modeling.py": "1457a4b84dfb20d4f0436a9358e0acf4a45f10baae41d5eb577f4982d7d60cf6",
+    "networks/vit_seg_modeling_resnet_skip.py": "bdb8cad0fca83914a4aaa94781955471094f59ae05322ccd23c30b77509a287c",
+    "datasets/dataset_Myops.py": "2823a845d686b72133895885f5354e8f19bf841479eead862e8b508b8b2a6318",
+    "text_features/embedding_class_information.pth": "d9d0abac36b0b98b99edc2f8cfac4c460f4dcd9b25588a8ef6bdeae37caa08dd",
+    "text_features/embedding_MRI_information.pth": "f2d8420d680b0f68140a811819cf6537236f7b8b4b2b5708d60050f29dba0462",
+    "list/all.txt": "cbdc032dc9c2d823f1988677f6103d674c23889730eff2ad88419034be2224d3",
+    "list/test_vol.txt": "dbd1d90738b2171fcda1bbc5e453dcc1c29f01f3cfbb187e855cd45e135da715",
+    "list/train.txt": "af61aa248e2bfecfcf3b8e34d1f68e3091fe312d37a86073000505f8caa60519",
+    "preprocess_data.py": "72638ae86081d4b35d22f6de7ac7d7eac34b8b5689a84cef1dfcaec19526a12a",
+    "test.py": "4ecd6962cc091d77244f46c74fecf5ca9063cfde384b33071cd2aacfa4e3a2d7"
+  },
+  "parameter_count": 84975359,
+  "state_dict_shape_sha256": "d0ac1d6051adafde48516478db9538a06a22e8ea4c98def3e916fee30f6babc6"
+}

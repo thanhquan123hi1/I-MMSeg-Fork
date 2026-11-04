@@ -13,6 +13,7 @@ class ContrastiveLoss(nn.Module):
         super(ContrastiveLoss, self).__init__()
 
         self.ignore_label = ignore_index
+        # Retained for caller compatibility; text rows determine the label count.
         self.prompt_num = prompt_num
 
     def sample_anchor(self, features, label, ignore, n_view):
@@ -75,11 +76,27 @@ class ContrastiveLoss(nn.Module):
         return loss
 
     def forward(self, features_embedding_all, label, text_embedding_all, ignore, sample_num = 10):
+        if len(features_embedding_all) != 3 or len(text_embedding_all) != 3:
+            raise ValueError("Contrastive loss requires three feature/text scales")
+        if label.ndim != 3 or not torch.isfinite(label).all() or not ((label >= 0) & (label <= 3) & (label == label.long())).all():
+            raise ValueError("Labels must have shape (B,H,W) and integer class IDs 0..3 (legacy MyoPS380)")
+        if sample_num <= 0:
+            raise ValueError("sample_num must be positive")
         loss = 0.0
         n_view_list = [5, 2, 1]
         n_view_list = [int(x * sample_num) for x in n_view_list]
 
         for features, text_embedding, n_view in zip(features_embedding_all, text_embedding_all, n_view_list):
+            if features.ndim != 4 or features.shape[0] != label.shape[0]:
+                raise ValueError("Feature batches must match the target batch")
+            if text_embedding.ndim != 2 or text_embedding.shape[1] != features.shape[1]:
+                raise ValueError("Text and image embedding dimensions must match")
+            if text_embedding.shape[0] == 0 or text_embedding.shape[0] % 4:
+                raise ValueError("Text embeddings must contain complete ordered groups of classes [0,1,2,3]")
+            if features.device != label.device or text_embedding.device != features.device:
+                raise ValueError("Features, labels and text embeddings must use the same device")
+            if n_view < 1:
+                raise ValueError("sample_num must produce at least one anchor per scale")
             i_label = label.unsqueeze(1).float()
             i_label = F.interpolate(i_label, (features.shape[2], features.shape[3]), mode='nearest')
             i_label = i_label.long()
@@ -90,9 +107,14 @@ class ContrastiveLoss(nn.Module):
             features = features.permute(0, 2, 3, 1).reshape(batch_size, -1, features.shape[1])
 
             anchor, target = self.sample_anchor(features, i_label, ignore, n_view)
+            if anchor is None:
+                # This scale has no eligible image anchors. Keep both branches in
+                # the graph without changing the reduction of the other scales.
+                loss += features.sum() * 0.0 + text_embedding.sum() * 0.0
+                continue
             anchor = torch.cat([anchor, text_embedding], dim=0)
             anchor = F.normalize(anchor, p=2, dim=1)
-            text_embedding_label = torch.tensor([0, 1, 2, 3]).repeat(self.prompt_num).to(target.device)
+            text_embedding_label = torch.arange(4, device=target.device).repeat(text_embedding.shape[0] // 4)
             target = torch.cat([target, text_embedding_label], dim=0)
             loss += self.contrastive_loss(anchor, target)
 
@@ -164,7 +186,6 @@ class DiceLoss(nn.Module):
             loss_label = self._dice_loss(inputs[:, i], target[:, i])
             class_wise_dice.append(1.0 - loss_label.item())
             loss += loss_label * weight[i]
-        print(class_wise_dice)
         return loss / self.n_classes
 
 
