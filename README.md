@@ -51,7 +51,7 @@ I_MMSeg/
 │
 ├── weights/
 │   └── TU_Myops128/
-│        └── TU_pretrain_R50-ViT-B_16_skip3_epo300_bs24_lr0.001_128/
+│        └── IMMSeg_1234/             # IMMSeg_<seed>
 │             # place epoch_299.pth here
 │
 ├── MyoPS380_dataset/     # place MyoPS380 dataset here
