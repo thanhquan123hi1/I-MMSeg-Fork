@@ -190,19 +190,69 @@ class DiceLoss(nn.Module):
 
 
 def calculate_metric_percase(pred, gt):
-    pred[pred > 0] = 1
-    gt[gt > 0] = 1
-    if pred.sum() > 0 and gt.sum()>0:
-        dice = metric.binary.dc(pred, gt)
-        hd95 = metric.binary.hd95(pred, gt)
-        return dice, hd95
-    
-    elif pred.sum() < 200 and gt.sum() <= 200:
-        return 1, 0
-    else:
-        return 0, 0
+    """Read foreground masks without modifying them; empty metrics are NaN."""
+    pred, gt = np.asarray(pred), np.asarray(gt)
+    if pred.shape != gt.shape:
+        raise ValueError("Prediction and GT masks must have the same shape")
+    if not np.isfinite(pred).all() or not np.isfinite(gt).all():
+        raise ValueError("Prediction and GT masks must not contain NaN or Inf")
+    pred, gt = pred.astype(bool, copy=False), gt.astype(bool, copy=False)
+    pred_empty = not np.any(pred)
+    gt_empty = not np.any(gt)
+    if pred_empty and gt_empty:
+        return np.nan, np.nan
+    if pred_empty or gt_empty:
+        return 0.0, np.nan
+    return metric.binary.dc(pred, gt), metric.binary.hd95(pred, gt)
 
-def test_single_volume(image, image1, image2, label, net, classes, patch_size=[256, 256], test_save_path=None, case=None, z_spacing=1):
+
+def evaluation_regions(classes):
+    """Keep the original order of individual classes and merged regions."""
+    regions = []
+    for i in range(1, classes):
+        regions.append((i,))
+        if i == 3:
+            regions.extend([(2, 3), tuple(range(1, classes))])
+    return regions
+
+
+def calculate_volume_metrics(prediction, label, classes):
+    """Build independent binary region masks, preserving both label maps."""
+    prediction, label = np.asarray(prediction), np.asarray(label)
+    if prediction.shape != label.shape:
+        raise ValueError("Prediction and GT label maps must have the same shape")
+    if not np.isin(prediction, range(classes)).all() or not np.isin(label, range(classes)).all():
+        raise ValueError(f"Prediction and GT must contain only class IDs 0..{classes - 1}")
+    return [calculate_metric_percase(np.isin(prediction, ids), np.isin(label, ids))
+            for ids in evaluation_regions(classes)]
+
+
+def aggregate_case_metrics(case_metrics):
+    """Return per-region Dice/HD95 means and their separate non-NaN counts."""
+    values = np.asarray(case_metrics, dtype=float)
+    if values.ndim != 3 or values.shape[0] == 0 or values.shape[2] != 2:
+        raise ValueError("Expected at least one case with shape (cases, regions, 2)")
+    if np.isinf(values).any():
+        raise ValueError("Case metrics must not contain Inf")
+    valid_counts = np.sum(~np.isnan(values), axis=0)
+    means = np.full(values.shape[1:], np.nan, dtype=float)
+    np.divide(np.nansum(values, axis=0), valid_counts,
+              out=means, where=valid_counts > 0)
+    return means, valid_counts
+
+
+def _prediction_from_logits(outputs, case, slice_index=None):
+    if not torch.isfinite(outputs).all():
+        location = f"case {case!r}"
+        if slice_index is not None:
+            location += f", slice {slice_index}"
+        raise ValueError(f"Model output contains NaN or Inf for {location}")
+    out = torch.argmax(torch.softmax(outputs, dim=1), dim=1).squeeze(0)
+    return out.cpu().detach().numpy()
+
+
+def test_single_volume(image, image1, image2, label, net, classes, patch_size=[256, 256], test_save_path=None, case=None, z_spacing=1, return_prediction=False):
+    """Evaluate without changing input tensors; optionally return the label map."""
     image, label = image.squeeze(0).cpu().detach().numpy(), label.squeeze(0).cpu().detach().numpy()
     image1, image2 = image1.squeeze(0).cpu().detach().numpy(), image2.squeeze(0).cpu().detach().numpy()
     if len(image.shape) == 3:  
@@ -224,8 +274,7 @@ def test_single_volume(image, image1, image2, label, net, classes, patch_size=[2
             net.eval()
             with torch.no_grad():
                 outputs = net(input,input1,input2)
-                out = torch.argmax(torch.softmax(outputs, dim=1), dim=1).squeeze(0)  
-                out = out.cpu().detach().numpy()
+                out = _prediction_from_logits(outputs, case, ind)
 
                 if x != patch_size[0] or y != patch_size[1]:
                     pred = zoom(out, (x / patch_size[0], y / patch_size[1]), order=0) 
@@ -238,8 +287,9 @@ def test_single_volume(image, image1, image2, label, net, classes, patch_size=[2
         input2 = torch.from_numpy(image2).unsqueeze(0).unsqueeze(0).float().cuda()
         net.eval()
         with torch.no_grad():
-            out = torch.argmax(torch.softmax(net(input,input1,input2), dim=1), dim=1).squeeze(0)
-            prediction = out.cpu().detach().numpy()
+            prediction = _prediction_from_logits(net(input,input1,input2), case)
+
+    metric_list = calculate_volume_metrics(prediction, label, classes)
     
     if test_save_path is not None:
             img_itk = sitk.GetImageFromArray(image.transpose(2,0,1).astype(np.float32))
@@ -252,15 +302,6 @@ def test_single_volume(image, image1, image2, label, net, classes, patch_size=[2
             sitk.WriteImage(img_itk, test_save_path + '/'+ case + "_img.nii.gz")
             sitk.WriteImage(lab_itk, test_save_path + '/'+ case + "_gt.nii.gz")
 
-    metric_list = []
-    for i in range(1, classes):
-        metric_list.append(calculate_metric_percase(prediction == i, label == i))
-        if i == 3:
-            prediction[prediction == 2] = 3
-            label[label == 2] = 3
-            metric_list.append(calculate_metric_percase(prediction == 3, label == 3))
-            prediction[prediction >= 1] = 1
-            label[label >= 1] = 1
-            metric_list.append(calculate_metric_percase(prediction == 1, label == 1))    
-    
+    if return_prediction:
+        return metric_list, prediction
     return metric_list

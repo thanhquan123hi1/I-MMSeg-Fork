@@ -10,7 +10,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from datasets.dataset_Myops import Myops_dataset
-from utils import test_single_volume
+from utils import aggregate_case_metrics, evaluation_regions, test_single_volume
 from networks.vit_seg_modeling import VisionTransformer as ViT_seg
 from networks.vit_seg_modeling import CONFIGS as CONFIGS_ViT_seg
 from collections import OrderedDict
@@ -49,17 +49,29 @@ def inference(args, model, test_save_path=None):
     testloader = DataLoader(db_test, batch_size=1, shuffle=False, num_workers=1)
     logging.info("{} test iterations per epoch".format(len(testloader)))
     model.eval()
-    metric_list = 0.0
+    case_metrics = []
+    regions = evaluation_regions(args.num_classes)
+    empty_counts = np.zeros((len(regions), 3), dtype=int)
     for i_batch, sampled_batch in tqdm(enumerate(testloader)):
         image, iamge1, image2, label, case_name = sampled_batch["image"], sampled_batch["image1"], sampled_batch["image2"], sampled_batch["label"], sampled_batch['case_name'][0]
-        metric_i = test_single_volume(image, iamge1, image2, label, model, classes=args.num_classes, patch_size=[args.img_size, args.img_size],
-                                      test_save_path=test_save_path, case=case_name, z_spacing=args.z_spacing)
+        metric_i, prediction = test_single_volume(image, iamge1, image2, label, model, classes=args.num_classes, patch_size=[args.img_size, args.img_size],
+                                      test_save_path=test_save_path, case=case_name, z_spacing=args.z_spacing, return_prediction=True)
+        gt = label.squeeze(0).cpu().detach().numpy()
         for idx, (dice, hd95) in enumerate(metric_i):
             logging.info(f"Class {idx + 1} - Dice: {dice:.4f}, HD95: {hd95:.4f}")
-        metric_list += np.array(metric_i)
-    metric_list = metric_list / len(db_test)
+            pred_empty = not np.isin(prediction, regions[idx]).any()
+            gt_empty = not np.isin(gt, regions[idx]).any()
+            empty_counts[idx] += (pred_empty and gt_empty,
+                                  pred_empty and not gt_empty,
+                                  gt_empty and not pred_empty)
+        case_metrics.append(metric_i)
+    metric_list, valid_counts = aggregate_case_metrics(case_metrics)
     for i in range(1, args.num_classes+2):
         logging.info('Mean class %d mean_dice %f mean_hd95 %f' % (i, metric_list[i-1][0], metric_list[i-1][1]))
+        logging.info('Mean class %d valid_dice_cases %d valid_hd95_cases %d total_cases %d' %
+                     (i, valid_counts[i-1][0], valid_counts[i-1][1], len(db_test)))
+        logging.info('Mean class %d both_empty_cases %d missed_foreground_cases %d false_positive_foreground_cases %d' %
+                     (i, empty_counts[i-1][0], empty_counts[i-1][1], empty_counts[i-1][2]))
     return "Testing Finished!"
 
 if __name__ == "__main__":

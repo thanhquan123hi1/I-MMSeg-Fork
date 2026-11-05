@@ -125,8 +125,12 @@ def test_protected_model_and_data_files_unchanged():
     manifest = json.loads(Path(__file__).with_name("fidelity_manifest.json").read_text())
     for name, expected in manifest["protected_files"].items():
         content = (ROOT / name).read_bytes()
+        if Path(name).suffix in {".py", ".txt"}:
+            # Git checkouts use different line endings on Windows and Linux.
+            content = content.replace(b"\r\n", b"\n")
         if name == "test.py":
-            # The only authorized evaluator edit is checkpoint-key compatibility.
+            # Normalize checkpoint-key compatibility; the manifest includes the
+            # authorized evaluator aggregation and empty-case reporting updates.
             content = content.replace(b'name = k[7:] if k.startswith("module.") else k', b'name = k[7:]')
         assert hashlib.sha256(content).hexdigest() == expected, name
 

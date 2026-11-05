@@ -1,0 +1,14 @@
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local evaluation outputs
+/evaluation_results/
+/predictions/
+/test_log/
+
+# Local datasets and model checkpoints (keep text_features/*.pth tracked)
+/MyoPS380_dataset/
+/weights/
+/model/

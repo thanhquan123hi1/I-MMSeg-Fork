@@ -78,6 +78,19 @@ CUDA_VISIBLE_DEVICES= "0,1" python train.py --dataset Myops --vit_name R50-ViT-B
 python test.py --dataset Myops --vit_name R50-ViT-B_16
 ```
 
+Evaluation uses the following empty-mask policy: if both masks are empty, Dice
+and HD95 are undefined (NaN); if exactly one mask is empty, Dice is 0 and HD95
+is NaN. Nonempty masks use the existing MedPy calculations without a voxel-count
+threshold. Each metric is averaged over its own non-NaN cases, and the log reports
+the valid case count for Dice and HD95 separately. An entirely undefined metric
+remains NaN. These results use a different empty-mask policy from the original
+release and its comparison table below.
+
+Evaluation builds separate binary masks for each region and leaves the original
+GT and prediction label maps intact. Model outputs containing NaN or Inf stop
+evaluation with the case/slice identified. Logs also report both-empty cases,
+missed foreground cases, and false-positive foreground cases per region.
+
 Comparative experiments on the MyoPS380 dataset
 
 ![test_result](./docs/test_result.png) 
