@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from networks.vit_seg_modeling import CONFIGS, VisionTransformer
 from utils import test_single_volume
+from datasets.profiles import build_dataset, dataset_name
 
 REGIONS = {
     "normal_myocardium": [1],
@@ -37,36 +38,47 @@ def sha256(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", type=Path, required=True)
+    parser.add_argument("--dataset", type=dataset_name, default="Myops", help="MyoPS380 or MyoPS++")
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--list-file", type=Path, default=ROOT / "list/test_vol.txt")
+    parser.add_argument("--list-file", type=Path, help="Override the MyoPS380 test list")
     parser.add_argument("--seed", type=int, default=1234, help="Inference random seed")
     args = parser.parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("The original inference pipeline requires CUDA.")
-    args.output_dir.mkdir(parents=True, exist_ok=False)
-    pred_dir = args.output_dir / "predictions"
-    pred_dir.mkdir()
-    names = args.list_file.read_text().split()
-    if not names or len(names) != len(set(names)):
-        raise ValueError("Test case list must be nonempty and contain no duplicates.")
-    train_cases = {n.split("_slice")[0] for n in (ROOT / "list/train.txt").read_text().split()}
-    if set(names) & train_cases:
-        raise ValueError("Repository train/test case lists overlap.")
-    total_slices = 0
-    for name in names:
-        shape = None
-        for modality in ("bSSFP", "LGE", "T2w"):
-            with h5py.File(args.data_root / modality / "test_vol_h5" / f"{name}.npy.h5", "r") as data:
-                image, label = data["image"][:], data["label"][:]
-                if image.shape != label.shape or image.ndim != 3:
-                    raise ValueError(f"Invalid image/label shape: {modality}/{name}")
-                if shape is not None and shape != image.shape:
-                    raise ValueError(f"Modalities are not aligned: {name}")
-                if not np.isfinite(image).all() or not np.isin(label, [0, 1, 2, 3]).all():
-                    raise ValueError(f"Invalid image values or labels: {modality}/{name}")
-                shape = image.shape
-        total_slices += shape[2]
+    dataset = build_dataset(args.dataset, args.data_root, "test_vol")
+    roi = args.dataset == "MyoPS++"
+    if roi:
+        if args.list_file:
+            parser.error("MyoPS++ uses the split packaged with the dataset")
+        manifest = args.data_root / "splits.json"
+        if not manifest.is_file():
+            manifest = args.data_root / "lists/test_vol.txt"
+        total_slices = sum(sample["label"].shape[2] for sample in dataset)
+    else:
+        manifest = args.list_file or ROOT / "list/test_vol.txt"
+        names = manifest.read_text().split()
+        if not names or len(names) != len(set(names)):
+            raise ValueError("Test case list must be nonempty and contain no duplicates.")
+        train_cases = {n.split("_slice")[0] for n in (ROOT / "list/train.txt").read_text().split()}
+        if set(names) & train_cases:
+            raise ValueError("Repository train/test case lists overlap.")
+        dataset.sample_list = names
+        # The legacy loader consumes only the first mask. Preflight all three archives.
+        total_slices = 0
+        for name in names:
+            shape = None
+            for modality in ("bSSFP", "LGE", "T2w"):
+                with h5py.File(args.data_root / modality / "test_vol_h5" / f"{name}.npy.h5", "r") as data:
+                    image, label = data["image"][:], data["label"][:]
+                    if image.shape != label.shape or image.ndim != 3:
+                        raise ValueError(f"Invalid image/label shape: {modality}/{name}")
+                    if shape is not None and shape != image.shape:
+                        raise ValueError(f"Modalities are not aligned: {name}")
+                    if not np.isfinite(image).all() or not np.isin(label, [0, 1, 2, 3]).all():
+                        raise ValueError(f"Invalid image values or labels: {modality}/{name}")
+                    shape = image.shape
+            total_slices += shape[2]
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -88,13 +100,17 @@ def main():
     model.load_state_dict(checkpoint, strict=True)
     del checkpoint
     model.cuda().eval()
+    args.output_dir.mkdir(parents=True, exist_ok=False)
+    pred_dir = args.output_dir / "predictions"
+    pred_dir.mkdir()
     metadata = {
         "checkpoint": str(args.checkpoint.resolve()),
         "checkpoint_sha256": sha256(args.checkpoint),
         "data_root": str(args.data_root.resolve()),
-        "test_list": str(args.list_file.resolve()),
-        "test_list_sha256": sha256(args.list_file),
-        "case_count": len(names), "slice_count": total_slices,
+        "dataset": args.dataset,
+        "test_list": str(manifest.resolve()),
+        "test_list_sha256": sha256(manifest),
+        "case_count": len(dataset), "slice_count": total_slices,
         "train_test_list_overlap": 0,
         "architecture": "R50-ViT-B_16", "input_size": 128,
         "parameter_count": sum(p.numel() for p in model.parameters()),
@@ -104,31 +120,30 @@ def main():
         "repository_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
         "source_hashes": {p: sha256(ROOT / p) for p in ["utils.py", "networks/vit_seg_modeling.py", "text_features/embedding_class_information.pth", "text_features/embedding_MRI_information.pth"]},
         "regions": REGIONS,
-        "hd95_units": "voxel (no physical voxel spacing supplied to MedPy)",
+        "hd95_units": "mm (predicted ROI grid)" if roi else "voxel (no physical voxel spacing supplied to MedPy)",
+        "metric_label_order": ["background", "normal", "scar", "edema"],
+        "nifti_label_order": ["background", "normal", "edema", "scar"] if roi else ["background", "normal", "scar", "edema"],
         "aggregation": "unweighted mean over non-NaN test cases independently per metric; standard deviation uses ddof=0; all-undefined results are null",
         "repository_empty_rule": "Both empty: Dice=undefined, HD95=undefined. Exactly one empty: Dice=0, HD95=undefined. Undefined values are excluded independently per metric; no voxel-count threshold.",
         "conventional_empty_rule": "Both empty: Dice=1, HD95=0. Exactly one empty: Dice=0, HD95=undefined (excluded from HD95 mean).",
     }
     (args.output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-    print(f"Validated {len(names)} cases / {total_slices} slices; checkpoint loaded strictly.", flush=True)
+    print(f"Validated {len(dataset)} cases / {total_slices} slices; checkpoint loaded strictly.", flush=True)
     rows = []
     start = time.perf_counter()
-    fields = ["case", "region", "label_ids", "pred_voxels", "gt_voxels", "repository_dice", "repository_hd95_voxel", "conventional_dice", "conventional_hd95_voxel"]
+    unit = "mm" if roi else "voxel"
+    fields = ["case", "region", "label_ids", "pred_voxels", "gt_voxels", "repository_dice", f"repository_hd95_{unit}", "conventional_dice", f"conventional_hd95_{unit}"]
     with open(args.output_dir / "per_case_metrics.csv", "w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
-        for index, name in enumerate(names, 1):
-            images = []
-            for modality in ("bSSFP", "LGE", "T2w"):
-                with h5py.File(args.data_root / modality / "test_vol_h5" / f"{name}.npy.h5", "r") as data:
-                    images.append(torch.from_numpy(data["image"][:]).unsqueeze(0))
-                    if modality == "bSSFP":
-                        label = torch.from_numpy(data["label"][:]).unsqueeze(0)
-            with torch.no_grad():
-                original_metrics, prediction = test_single_volume(*images, label, model, classes=4, patch_size=[128, 128], test_save_path=str(pred_dir), case=name, z_spacing=1, return_prediction=True)
-            # Use in-memory views in the same axis order as the saved NIfTI arrays.
-            pred = prediction.transpose(2, 0, 1)
-            gt = label.squeeze(0).cpu().detach().numpy().transpose(2, 0, 1)
+        for index, sample in enumerate(dataset, 1):
+            name = sample["case_name"]
+            images = [torch.from_numpy(sample[key]).unsqueeze(0) for key in ("image", "image1", "image2")]
+            gt = sample["label"]
+            label = torch.from_numpy(gt).unsqueeze(0)
+            original_metrics, pred = test_single_volume(
+                *images, label, model, classes=4, patch_size=[128, 128], test_save_path=str(pred_dir),
+                case=name, return_prediction=True, spacing=sample.get("spacing"), roi_affine=sample.get("affine"))
             for (region, ids), (dice, hd95) in zip(REGIONS.items(), original_metrics):
                 p, g = np.isin(pred, ids), np.isin(gt, ids)
                 npred, ngt = int(p.sum()), int(g.sum())
@@ -140,7 +155,7 @@ def main():
                 rows.append(row)
                 writer.writerow(row)
             stream.flush()
-            print(f"[{index:02d}/{len(names)}] {name} scar Dice={original_metrics[1][0]:.4f} edema(2+3) Dice={original_metrics[3][0]:.4f} elapsed={time.perf_counter()-start:.1f}s", flush=True)
+            print(f"[{index:02d}/{len(dataset)}] {name} scar Dice={original_metrics[1][0]:.4f} edema(2+3) Dice={original_metrics[3][0]:.4f} elapsed={time.perf_counter()-start:.1f}s", flush=True)
     summary = []
     for region in REGIONS:
         selected = [r for r in rows if r["region"] == region]

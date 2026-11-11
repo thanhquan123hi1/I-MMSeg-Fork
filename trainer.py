@@ -14,10 +14,10 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from utils import DiceLoss, SoftmaxWeightedLoss
 from utils import ContrastiveLoss
-from torchvision import transforms
 
 def trainer_Myops(args, model, snapshot_path):
     from datasets.dataset_Myops import Myops_dataset, RandomGenerator
+    from datasets.profiles import build_dataset
     logging.basicConfig(filename=snapshot_path + "/log.txt", level=logging.INFO,
                         format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
@@ -25,9 +25,12 @@ def trainer_Myops(args, model, snapshot_path):
     base_lr = args.base_lr
     num_classes = args.num_classes
     batch_size = args.batch_size * args.n_gpu
-    db_train = Myops_dataset(base_dir=args.root_path, base_dir1=args.root_path1, base_dir2=args.root_path2, list_dir=args.list_dir, split="train",
-                               transform=transforms.Compose(
-                                   [RandomGenerator(output_size=[args.img_size, args.img_size])]))
+    transform = RandomGenerator(output_size=[args.img_size, args.img_size])
+    if hasattr(args, "data_root"):
+        db_train = build_dataset(args.dataset, args.data_root, "train", args.list_dir, transform)
+    else:
+        # Support callers passing the original three modality directories.
+        db_train = Myops_dataset(args.root_path, args.root_path1, args.root_path2, args.list_dir, "train", transform)
     print("The length of train set is: {}".format(len(db_train)))
 
     def worker_init_fn(worker_id):

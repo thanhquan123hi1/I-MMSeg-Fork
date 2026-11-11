@@ -234,11 +234,11 @@ def test_actual_inference_logs_metric_specific_counts(caplog):
         "evaluation_regions": evaluation_regions,
         "np": np, "tqdm": lambda iterable: iterable,
         "DataLoader": lambda dataset, **kwargs: dataset,
+        "build_dataset": lambda *args: batches,
         "test_single_volume": lambda *a, case, **kw: (values[int(case)], predictions[int(case)]),
     }
     exec(compile(ast.Module(body=[function], type_ignores=[]), str(path), "exec"), scope)
-    args = SimpleNamespace(Dataset=lambda **kwargs: batches, volume_path="", volume_path1="",
-                           volume_path2="", list_dir="", num_classes=4, img_size=128, z_spacing=1)
+    args = SimpleNamespace(dataset="Myops", data_root="", list_dir=None, num_classes=4, img_size=128)
     caplog.set_level(logging.INFO)
     assert scope["inference"](args, torch.nn.Identity()) == "Testing Finished!"
     assert "Mean class 1 mean_dice 0.266667 mean_hd95 4.000000" in caplog.text

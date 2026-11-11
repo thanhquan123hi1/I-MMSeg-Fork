@@ -8,18 +8,16 @@ import torch.backends.cudnn as cudnn
 from networks.vit_seg_modeling import VisionTransformer as ViT_seg
 from networks.vit_seg_modeling import CONFIGS as CONFIGS_ViT_seg
 from trainer import trainer_Myops
-import open_clip
-import clip
-from open_clip import get_tokenizer
 from pathlib import Path
+from datasets.profiles import dataset_name, default_root
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', type=str,
-                    default='Myops', help='experiment_name')
+parser.add_argument('--dataset', type=dataset_name, default='Myops', help='MyoPS380 (Myops) or MyoPS++')
+parser.add_argument('--data-root', '--data_root', type=Path, help='Processed MyoPS380, MyoPS++ ROI export, or SCAR ROI cache')
 parser.add_argument('--list_dir', type=str,
-                    default=f'{PROJECT_ROOT}/list', help='list dir')
+                    default=None, help='MyoPS380 split manifest directory')
 parser.add_argument('--num_classes', type=int,
                     default=4, help='output channel of network')
 parser.add_argument('--max_iterations', type=int,
@@ -67,6 +65,8 @@ class_prompts = [
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 def Biomedclip_model():
+    import open_clip
+    from open_clip import get_tokenizer
     biomedclip_model = open_clip.create_model_from_pretrained(
         'hf-hub:microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224')
     biomedclip_model = biomedclip_model[0].text
@@ -103,23 +103,12 @@ if __name__ == "__main__":
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed(args.seed)
-    dataset_name = args.dataset
-    dataset_config = {
-        'Myops': {
-            'root_path': f'{PROJECT_ROOT}/MyoPS380_dataset/Processed_data/bSSFP/train_npz',
-            'root_path1': f'{PROJECT_ROOT}/MyoPS380_dataset/Processed_data/LGE/train_npz',
-            'root_path2': f'{PROJECT_ROOT}/MyoPS380_dataset/Processed_data/T2w/train_npz',
-            'list_dir': f'{PROJECT_ROOT}/list',
-            'num_classes': 4,
-        },
-    }
-    args.num_classes = dataset_config[dataset_name]['num_classes']
-    args.root_path = dataset_config[dataset_name]['root_path']
-    args.root_path1 = dataset_config[dataset_name]['root_path1']
-    args.root_path2 = dataset_config[dataset_name]['root_path2']
-    args.list_dir = dataset_config[dataset_name]['list_dir']
+    args.data_root = args.data_root or default_root(args.dataset)
+    args.num_classes = 4
+    if args.dataset == "MyoPS++" and args.img_size != 128:
+        parser.error("The MyoPS++ ROI128 profile requires --img_size 128")
     args.is_pretrain = True
-    args.exp = 'TU_' + dataset_name + str(args.img_size)
+    args.exp = 'TU_' + args.dataset + str(args.img_size)
     snapshot_path = f"{PROJECT_ROOT}/weights/{args.exp}/IMMSeg_{args.seed}"
 
     if not os.path.exists(snapshot_path):
@@ -130,5 +119,4 @@ if __name__ == "__main__":
     if args.vit_name.find('R50') != -1:
         config_vit.patches.grid = (int(args.img_size / args.vit_patches_size), int(args.img_size / args.vit_patches_size))
     net = ViT_seg(config_vit, img_size=args.img_size, num_classes=config_vit.n_classes).cuda()
-    trainer = {'Myops': trainer_Myops,}
-    trainer[dataset_name](args, net, snapshot_path)
+    trainer_Myops(args, net, snapshot_path)

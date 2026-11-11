@@ -78,6 +78,36 @@ CUDA_VISIBLE_DEVICES= "0,1" python train.py --dataset Myops --vit_name R50-ViT-B
 python test.py --dataset Myops --vit_name R50-ViT-B_16
 ```
 
+The same entry points accept `--dataset MyoPS380` (alias of `Myops`) and
+`--dataset MyoPS++`. Use `--data-root` to select a dataset location. Examples
+for PowerShell, run from this repository:
+
+```powershell
+python train.py --dataset MyoPS380 --data-root "D:\NCKH\Dataset\MyoPS380\Processed_data"
+python train.py --dataset "MyoPS++" --data-root "D:\NCKH\Dataset\MyoPSpp_UNet2D_ROI128_1mm"
+python test.py --dataset "MyoPS++" --data-root "D:\NCKH\Dataset\MyoPSpp_UNet2D_ROI128_1mm"
+```
+
+MyoPS++ reads the predicted U-Net2D ROI128 export directly, using its
+`splits.json` (64 train patients, 296 slices, 16 test volumes). It also accepts
+the SCAR `myopspp_unet2d_roi128_1mm/cache` directory with canonical labels and
+its own manifests. Both sources supply normalized C0/LGE/T2 images. Training
+uses the existing I-MMSeg augmentation after loading the slices.
+
+| Tissue | MyoPS380 cache / I-MMSeg loss and logits | MyoPS++ ROI NIfTI input | SCAR cache / MyoPS++ output NIfTI |
+|---|---:|---:|---:|
+| Background (includes LV/RV cavities) | 0 | 0, 500, 600 | 0 |
+| Normal myocardium | 1 | 200 | 1 |
+| Scar | 2 | 2221 | 3 |
+| Edema only | 3 | 1220 | 2 |
+
+MyoPS++ metrics use the model label order and patient-level ROI spacing for
+HD95 in mm. Saved prediction and GT NIfTIs use the ROI affine and SCAR label
+order. MyoPS380 reports HD95 in voxels. Training stores the two datasets under
+`weights/TU_Myops128/` and `weights/TU_MyoPS++128/`, respectively.
+Use `--batch_size 1` for the single-image training configuration. The default
+physical batch size is 16 per GPU.
+
 Evaluation uses the following empty-mask policy: if both masks are empty, Dice
 and HD95 are undefined (NaN); if exactly one mask is empty, Dice is 0 and HD95
 is NaN. Nonempty masks use the existing MedPy calculations without a voxel-count

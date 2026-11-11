@@ -189,7 +189,7 @@ class DiceLoss(nn.Module):
         return loss / self.n_classes
 
 
-def calculate_metric_percase(pred, gt):
+def calculate_metric_percase(pred, gt, spacing=None):
     """Read foreground masks without modifying them; empty metrics are NaN."""
     pred, gt = np.asarray(pred), np.asarray(gt)
     if pred.shape != gt.shape:
@@ -203,7 +203,7 @@ def calculate_metric_percase(pred, gt):
         return np.nan, np.nan
     if pred_empty or gt_empty:
         return 0.0, np.nan
-    return metric.binary.dc(pred, gt), metric.binary.hd95(pred, gt)
+    return metric.binary.dc(pred, gt), metric.binary.hd95(pred, gt, voxelspacing=spacing)
 
 
 def evaluation_regions(classes):
@@ -216,14 +216,14 @@ def evaluation_regions(classes):
     return regions
 
 
-def calculate_volume_metrics(prediction, label, classes):
+def calculate_volume_metrics(prediction, label, classes, spacing=None):
     """Build independent binary region masks, preserving both label maps."""
     prediction, label = np.asarray(prediction), np.asarray(label)
     if prediction.shape != label.shape:
         raise ValueError("Prediction and GT label maps must have the same shape")
     if not np.isin(prediction, range(classes)).all() or not np.isin(label, range(classes)).all():
         raise ValueError(f"Prediction and GT must contain only class IDs 0..{classes - 1}")
-    return [calculate_metric_percase(np.isin(prediction, ids), np.isin(label, ids))
+    return [calculate_metric_percase(np.isin(prediction, ids), np.isin(label, ids), spacing)
             for ids in evaluation_regions(classes)]
 
 
@@ -251,7 +251,8 @@ def _prediction_from_logits(outputs, case, slice_index=None):
     return out.cpu().detach().numpy()
 
 
-def test_single_volume(image, image1, image2, label, net, classes, patch_size=[256, 256], test_save_path=None, case=None, z_spacing=1, return_prediction=False):
+def test_single_volume(image, image1, image2, label, net, classes, patch_size=[256, 256], test_save_path=None, case=None, z_spacing=1, return_prediction=False,
+                       spacing=None, roi_affine=None):
     """Evaluate without changing input tensors; optionally return the label map."""
     image, label = image.squeeze(0).cpu().detach().numpy(), label.squeeze(0).cpu().detach().numpy()
     image1, image2 = image1.squeeze(0).cpu().detach().numpy(), image2.squeeze(0).cpu().detach().numpy()
@@ -289,18 +290,28 @@ def test_single_volume(image, image1, image2, label, net, classes, patch_size=[2
         with torch.no_grad():
             prediction = _prediction_from_logits(net(input,input1,input2), case)
 
-    metric_list = calculate_volume_metrics(prediction, label, classes)
+    metric_list = calculate_volume_metrics(prediction, label, classes, spacing)
     
-    if test_save_path is not None:
-            img_itk = sitk.GetImageFromArray(image.transpose(2,0,1).astype(np.float32))
-            prd_itk = sitk.GetImageFromArray(prediction.transpose(2,0,1).astype(np.float32))
-            lab_itk = sitk.GetImageFromArray(label.transpose(2,0,1).astype(np.float32))
-            img_itk.SetSpacing((z_spacing, 1, 1))
-            prd_itk.SetSpacing((z_spacing, 1, 1))
-            lab_itk.SetSpacing((z_spacing, 1, 1))
-            sitk.WriteImage(prd_itk, test_save_path + '/'+case + "_pred.nii.gz")
-            sitk.WriteImage(img_itk, test_save_path + '/'+ case + "_img.nii.gz")
-            sitk.WriteImage(lab_itk, test_save_path + '/'+ case + "_gt.nii.gz")
+    if test_save_path is not None and roi_affine is not None:
+        import nibabel as nib
+        from pathlib import Path
+        from datasets.myops_plus import SWAP_PATHOLOGY
+        # SCAR-compatible files use canonical IDs; in-memory scoring uses model IDs.
+        for suffix, array in (("img", image), ("pred", SWAP_PATHOLOGY[prediction.astype(np.uint8)]),
+                              ("gt", SWAP_PATHOLOGY[label.astype(np.uint8)])):
+            nii = nib.Nifti1Image(array, roi_affine)
+            nii.header.set_xyzt_units("mm")
+            nib.save(nii, Path(test_save_path) / f"{case}_{suffix}.nii.gz")
+    elif test_save_path is not None:
+        img_itk = sitk.GetImageFromArray(image.transpose(2,0,1).astype(np.float32))
+        prd_itk = sitk.GetImageFromArray(prediction.transpose(2,0,1).astype(np.float32))
+        lab_itk = sitk.GetImageFromArray(label.transpose(2,0,1).astype(np.float32))
+        img_itk.SetSpacing((z_spacing, 1, 1))
+        prd_itk.SetSpacing((z_spacing, 1, 1))
+        lab_itk.SetSpacing((z_spacing, 1, 1))
+        sitk.WriteImage(prd_itk, test_save_path + '/'+case + "_pred.nii.gz")
+        sitk.WriteImage(img_itk, test_save_path + '/'+ case + "_img.nii.gz")
+        sitk.WriteImage(lab_itk, test_save_path + '/'+ case + "_gt.nii.gz")
 
     if return_prediction:
         return metric_list, prediction
